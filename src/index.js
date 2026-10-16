@@ -30,6 +30,8 @@ app.use((req, res, next) => {
 app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false }));
 app.use('/uploads', express.static(process.env.UPLOAD_DIR || path.join(__dirname, '../uploads'), { maxAge: '30d' }));
 
+app.get('/', (req, res) => res.send('BSM API is running successfully!'));
+
 app.get('/api/health', (req, res) => res.json({ ok: true, db: mongoose.connection.readyState === 1 }));
 app.use('/api/public', require('./routes/public'));
 app.use('/api/auth', require('./routes/auth'));
