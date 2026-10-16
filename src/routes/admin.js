@@ -79,10 +79,30 @@ router.put('/settings', U.requirePerm('settings'), U.wrap(async (req, res) => {
 router.post('/settings/test-email', U.requirePerm('settings'), U.wrap(async (req, res) => {
   const s = await U.getSettings();
   const to = s.email?.notifyEmail || s.email?.gmailUser || process.env.GMAIL_USER;
+
+  if (!to) {
+    throw new U.HttpError(400, 'Recipient configuration targets are completely empty.');
+  }
+
+  // Execute the transport wrapper
   await U.sendMail({ to, subject: 'Test email', html: '<p>Your email settings work.</p>' });
+  
+  // Directly pull the absolute newest evaluation log entry
   const last = await M.EmailLog.findOne({ to, subject: 'Test email' }).sort('-createdAt');
-  res.json({ status: last?.status, error: last?.error, to });
+
+  // Handle explicit delivery status flags cleanly without returning a 502
+  if (!last || last.status === 'failed' || last.status === 'skipped') {
+    return res.status(500).json({
+      success: false,
+      status: last?.status || 'failed',
+      error: last?.error || 'Unknown nodemailer runtime interception error.',
+      to
+    });
+  }
+
+  res.json({ status: last.status, error: last.error, to });
 }));
+
 
 // ---------- calendar ----------
 router.get('/calendar', U.requirePerm('calendar'), U.wrap(async (req, res) => {
