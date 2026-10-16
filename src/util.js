@@ -70,45 +70,16 @@ async function nextSeq(id) { const c = await M.Counter.findOneAndUpdate({ _id: i
 async function sendMail({ to, subject, html, attachments, booking }) {
   try {
     const s = await getSettings();
-    
-    // 1. Fallback securely to Environment Variables if DB settings are blank
-    const apiKey = process.env.RESEND_API_KEY || process.env.SENDGRID_API_KEY;
-    const fromEmail = s.email?.notifyEmail || process.env.FROM_EMAIL || 'noreply@yourdomain.com';
-
-    if (!apiKey || !to) {
-      await M.EmailLog.create({ to, subject, status: 'skipped', error: 'Email API key not configured', booking });
-      return;
-    }
-
-    // 2. Initialize a bulletproof connection config
-    const tr = nodemailer.createTransport({
-      host: '://resend.com', // or 'smtp.sendgrid.net' if using SendGrid
-      port: 465,
-      secure: true, // Uses rock-solid implicit SSL
-      auth: {
-        user: 'resend', // Always literal string 'resend' for Resend, or 'apikey' for SendGrid
-        pass: apiKey
-      },
-      connectionTimeout: 5000, // Hard stop after 5 seconds if anything lags
-      greetingTimeout: 5000
-    });
-
-    // 3. Dispatch the payload
-    await tr.sendMail({ 
-      from: `"${s.email?.fromName || s.company.name}" <${fromEmail}>`, 
-      to, 
-      subject, 
-      html: layout(s, subject, html), 
-      attachments 
-    });
-
+    const user = s.email?.gmailUser || process.env.GMAIL_USER;
+    const pass = s.email?.gmailAppPassword || process.env.GMAIL_APP_PASSWORD;
+    if (!user || !pass || !to) { await M.EmailLog.create({ to, subject, status: 'skipped', error: 'Email not configured', booking }); return; }
+    const tr = nodemailer.createTransport({ service: 'gmail', auth: { user, pass } });
+    await tr.sendMail({ from: `"${s.email?.fromName || s.company.name}" <${user}>`, to, subject, html: layout(s, subject, html), attachments });
     await M.EmailLog.create({ to, subject, status: 'sent', booking });
   } catch (e) {
-    console.error('Mail system error:', e);
     await M.EmailLog.create({ to, subject, status: 'failed', error: String(e.message).slice(0, 300), booking }).catch(() => {});
   }
 }
-
 const sendMailBg = (o) => { setImmediate(() => sendMail(o)); };
 const esc = (t = '') => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 function layout(s, title, body) {
