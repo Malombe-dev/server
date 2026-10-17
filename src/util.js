@@ -67,14 +67,33 @@ const phoneKey = (p = '') => { const d = String(p).replace(/\D/g, ''); return d.
 async function nextSeq(id) { const c = await M.Counter.findOneAndUpdate({ _id: id }, { $inc: { seq: 1 } }, { upsert: true, new: true }); return c.seq; }
 
 // ---------- email (background, logged) ----------
+// Uses Brevo's HTTPS API when BREVO_API_KEY is set (works on hosts that block SMTP, e.g. Render free tier);
+// otherwise falls back to Gmail SMTP.
+async function sendViaBrevo({ s, to, subject, html, attachments }) {
+  const senderEmail = process.env.BREVO_SENDER_EMAIL || s.email?.gmailUser || process.env.GMAIL_USER;
+  if (!senderEmail) throw new Error('Set BREVO_SENDER_EMAIL to your verified Brevo sender address');
+  const body = {
+    sender: { name: s.email?.fromName || s.company.name, email: senderEmail },
+    to: [{ email: to }],
+    subject,
+    htmlContent: layout(s, subject, html),
+  };
+  if (attachments?.length) body.attachment = attachments.map((a) => ({ name: a.filename, content: Buffer.from(a.content).toString('base64') }));
+  const r = await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', headers: { 'api-key': process.env.BREVO_API_KEY, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`Brevo ${r.status}: ${(await r.text()).slice(0, 200)}`);
+}
+const emailConfigured = (s) => !!(process.env.BREVO_API_KEY || (s.email?.gmailUser && s.email?.gmailAppPassword) || (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD));
 async function sendMail({ to, subject, html, attachments, booking }) {
   try {
     const s = await getSettings();
-    const user = s.email?.gmailUser || process.env.GMAIL_USER;
-    const pass = s.email?.gmailAppPassword || process.env.GMAIL_APP_PASSWORD;
-    if (!user || !pass || !to) { await M.EmailLog.create({ to, subject, status: 'skipped', error: 'Email not configured', booking }); return; }
-    const tr = nodemailer.createTransport({ service: 'gmail', auth: { user, pass } });
-    await tr.sendMail({ from: `"${s.email?.fromName || s.company.name}" <${user}>`, to, subject, html: layout(s, subject, html), attachments });
+    if (!to || !emailConfigured(s)) { await M.EmailLog.create({ to, subject, status: 'skipped', error: 'Email not configured', booking }); return; }
+    if (process.env.BREVO_API_KEY) await sendViaBrevo({ s, to, subject, html, attachments });
+    else {
+      const user = s.email?.gmailUser || process.env.GMAIL_USER;
+      const pass = s.email?.gmailAppPassword || process.env.GMAIL_APP_PASSWORD;
+      const tr = nodemailer.createTransport({ service: 'gmail', auth: { user, pass }, connectionTimeout: 15000, socketTimeout: 20000 });
+      await tr.sendMail({ from: `"${s.email?.fromName || s.company.name}" <${user}>`, to, subject, html: layout(s, subject, html), attachments });
+    }
     await M.EmailLog.create({ to, subject, status: 'sent', booking });
   } catch (e) {
     await M.EmailLog.create({ to, subject, status: 'failed', error: String(e.message).slice(0, 300), booking }).catch(() => {});
@@ -135,4 +154,4 @@ function invoicePdf(inv) {
   return doc;
 }
 
-module.exports = { wrap, HttpError, signIn, requireAuth, requirePerm, ownerOnly, can, logActivity, getSettings, publicSettings, trackingNumber, calcTotals, phoneKey, nextSeq, sendMail, sendMailBg, esc, kes, invoicePdf, COOKIE, round };
+module.exports = { wrap, HttpError, signIn, requireAuth, requirePerm, ownerOnly, can, logActivity, getSettings, publicSettings, trackingNumber, calcTotals, phoneKey, nextSeq, sendMail, sendMailBg, emailConfigured, esc, kes, invoicePdf, COOKIE, round };

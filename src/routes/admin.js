@@ -78,31 +78,11 @@ router.put('/settings', U.requirePerm('settings'), U.wrap(async (req, res) => {
 }));
 router.post('/settings/test-email', U.requirePerm('settings'), U.wrap(async (req, res) => {
   const s = await U.getSettings();
-  const to = s.email?.notifyEmail || s.email?.gmailUser || process.env.GMAIL_USER;
-
-  if (!to) {
-    throw new U.HttpError(400, 'Recipient configuration targets are completely empty.');
-  }
-
-  // Execute the transport wrapper
+  const to = s.email?.notifyEmail || s.email?.gmailUser || process.env.GMAIL_USER || process.env.BREVO_SENDER_EMAIL;
   await U.sendMail({ to, subject: 'Test email', html: '<p>Your email settings work.</p>' });
-  
-  // Directly pull the absolute newest evaluation log entry
   const last = await M.EmailLog.findOne({ to, subject: 'Test email' }).sort('-createdAt');
-
-  // Handle explicit delivery status flags cleanly without returning a 502
-  if (!last || last.status === 'failed' || last.status === 'skipped') {
-    return res.status(500).json({
-      success: false,
-      status: last?.status || 'failed',
-      error: last?.error || 'Unknown nodemailer runtime interception error.',
-      to
-    });
-  }
-
-  res.json({ status: last.status, error: last.error, to });
+  res.json({ status: last?.status, error: last?.error, to });
 }));
-
 
 // ---------- calendar ----------
 router.get('/calendar', U.requirePerm('calendar'), U.wrap(async (req, res) => {
@@ -165,7 +145,7 @@ router.get('/dashboard', U.wrap(async (req, res) => {
   ]);
   res.json({
     pending, todayMoves, upcoming, recent, failedEmails,
-    emailConfigured: !!((s.email?.gmailUser && s.email?.gmailAppPassword) || (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)),
+    emailConfigured: U.emailConfigured(s),
     month: { moves: monthBookings.length, invoiced: monthBookings.reduce((a, b) => a + (b.totals?.total || 0), 0), paid: monthBookings.reduce((a, b) => a + (b.amountPaid || 0), 0), completed: monthBookings.filter((b) => b.status === 'completed').length },
   });
 }));
